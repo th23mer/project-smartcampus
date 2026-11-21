@@ -1,0 +1,70 @@
+[project]
+name = "smartcampus-backend"
+version = "0.1.0"
+description = "Backend FastAPI de SmartCampus AI (API /api/v1, services, couche agentique)."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic==1.20.1",
+    "asyncpg==0.32.0",
+    "fastapi==0.163.1",
+    "pgvector==0.5.1",
+    "psycopg[binary]==3.3.9",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.3",
+    "pyyaml==6.0.3",
+    "sqlalchemy[asyncio]==2.1.8",
+    "uvicorn[standard]==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx==0.28.1",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.5.0",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.5",
+]
+
+# Pas de [build-system] : le backend est une application (projet « virtuel » pour uv),
+# pas une bibliothèque publiée. Le paquet `app` est importé depuis le dossier backend/.
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra"
+# Starlette 1.x suggère httpx2 pour TestClient ; httpx reste la dépendance demandée (SA-7).
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+markers = [
+    "db: test qui exige une base PostgreSQL joignable (TEST_DATABASE_URL)",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "ASYNC", "RUF"]
+# RUF001-003 : les guillemets français et apostrophes typographiques sont voulus.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# Couverture (SA-22) : `uv run pytest --cov` mesure app/ ; rapport par module.
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = false
+skip_empty = true

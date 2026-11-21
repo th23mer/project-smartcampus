@@ -1,0 +1,15 @@
+# Contexte de build du frontend (SA-9) : les dépendances sont réinstallées par `npm ci`.
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+# Secrets / configuration locale : jamais dans l'image (NEXT_PUBLIC_* = arguments de build).
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore

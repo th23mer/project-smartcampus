@@ -1,0 +1,23 @@
+# Configuration NON SECRÈTE du backend SmartCampus AI (SA-7).
+# Les secrets (mots de passe, clés d'API, URL de base avec identifiants) vont UNIQUEMENT
+# dans les variables d'environnement (.env, jamais commité ; voir .env.example).
+# Priorité : variables d'environnement > ce fichier > valeurs par défaut du code.
+
+app_name: "SmartCampus AI"
+app_version: "0.1.0"
+api_prefix: "/api/v1"
+
+# Origines autorisées par CORS (le frontend Next.js en dev).
+cors_origins:
+  - "http://localhost:3000"
+  - "http://127.0.0.1:3000"
+
+log_level: "INFO"
+log_json: true
+
+# Pool de connexions SQLAlchemy (moteur async).
+db_pool_size: 5
+db_max_overflow: 10
+db_echo: false
+# Délai max (secondes) de la vérification de la base dans /health/ready.
+db_ready_timeout_s: 2.0

@@ -1,0 +1,15 @@
+# Contexte de build du backend (SA-9) : rien de local, rien de secret.
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+# Secrets : jamais dans l'image (les variables arrivent par docker-compose.yml).
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore

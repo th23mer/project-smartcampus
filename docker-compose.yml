@@ -1,0 +1,148 @@
+# SmartCampus AI : services Docker Compose.
+# SA-9  (E1) : services `backend`, `frontend`, `mailpit` (démarrés par défaut) ;
+#              `worker` (profil worker), `seaweedfs` (profil seaweedfs), `mlflow` (profil mlflow).
+#
+# Toutes les valeurs viennent du fichier `.env` (copie locale de `.env.example`, jamais commitée).
+# Ports hôtes : variables *_HOST_PORT avec valeurs standard par défaut (surcharger dans .env).
+# Lancement : make up   (ou docker compose up -d --wait)   ;   voir `make help`.
+
+name: smartcampus
+
+services:
+  # ------------------------------------------------------------------------------------------
+  # SA-9 : application. La base PostgreSQL (services db / db-test) arrive avec E2 (SA-16).
+  # ------------------------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      target: dev
+      args:
+        # UID/GID de l'utilisateur du conteneur = ceux du développeur (fichiers créés dans le
+        # volume monté). `make` les remplit avec `id -u` / `id -g` ; 1000 par défaut.
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    image: smartcampus-backend:dev
+    container_name: smartcampus-backend
+    restart: unless-stopped
+    # Liste EXPLICITE des variables transmises au conteneur. Ajouter ici toute nouvelle variable du backend
+    # (ex. clé d'API du LLM, E4) en plus de .env.example.
+    environment: &backend-env
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-false}
+      # Le navigateur appelle l'API depuis l'origine du frontend publiée sur l'hôte.
+      CORS_ORIGINS: '["http://localhost:${FRONTEND_HOST_PORT:-3000}","http://127.0.0.1:${FRONTEND_HOST_PORT:-3000}"]'
+      # E-mails sortants (jobs `email`, E3/E5) : capturés par Mailpit en dev, rien ne part.
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      MAIL_FROM: ${MAIL_FROM:-no-reply@smartcampus.example}
+    ports:
+      # 127.0.0.1 seulement : l'auth simulée X-Dev-* ne doit pas être joignable depuis le réseau.
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    volumes:
+      # Code monté pour le rechargement à chaud ; l'environnement Python est dans /opt/venv.
+      - ./backend:/app
+
+  # File de jobs (ADR-06, table `job` + FOR UPDATE SKIP LOCKED). Le module n'existe pas encore :
+  # commande provisoire qui s'arrête aussitôt. Quand le worker sera livré, remplacer `command`
+  # par  ["uv", "run", "--frozen", "python", "-m", "app.jobs.worker"]  et retirer le profil.
+  worker:
+    image: smartcampus-backend:dev
+    build:
+      context: ./backend
+      target: dev
+      args:
+        # UID/GID de l'utilisateur du conteneur = ceux du développeur (fichiers créés dans le
+        # volume monté). `make` les remplit avec `id -u` / `id -g` ; 1000 par défaut.
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    container_name: smartcampus-worker
+    profiles: ["worker"]
+    restart: "no"
+    environment: *backend-env
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      disable: true
+    command: ["sh", "-c", "echo \"[worker] pas encore livré (ADR-06) : remplacer la commande par uv run python -m app.jobs.worker\""]
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+      # NEXT_PUBLIC_* sont figées dans le JS au `next build` : arguments de build (cible prod)…
+      args: &next-public
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${BACKEND_HOST_PORT:-8000}}
+        NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV:-dev}
+        NEXT_PUBLIC_CHAT_MOCK: ${NEXT_PUBLIC_CHAT_MOCK:-true}
+    image: smartcampus-frontend:dev
+    container_name: smartcampus-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    # … et variables d'environnement, relues par `next dev` à chaque démarrage.
+    # L'URL de l'API est celle vue par le NAVIGATEUR (port hôte), pas http://backend:8000.
+    environment:
+      <<: *next-public
+      NEXT_TELEMETRY_DISABLED: "1"
+      NPM_CONFIG_UPDATE_NOTIFIER: "false"
+      # Décommenter si le rechargement à chaud ne voit pas les modifications (macOS, Windows/WSL).
+      # WATCHPACK_POLLING: "true"
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app
+      # Volumes anonymes : les node_modules et le cache .next de l'IMAGE masquent ceux de l'hôte.
+      - /app/node_modules
+      - /app/.next
+
+  # Boîte aux lettres de dev : capture tous les e-mails (SMTP 1025), interface web 8025.
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    container_name: smartcampus-mailpit
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: "500"
+      TZ: Africa/Tunis
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025"
+
+  # ------------------------------------------------------------------------------------------
+  # Services optionnels (désactivés par défaut) : docker compose --profile seaweedfs up -d
+  # ------------------------------------------------------------------------------------------
+  # Stockage objet compatible S3 (ADR-05 : disque local par défaut, S3 seulement si utile).
+  # SeaweedFS remplace MinIO, prévu au départ : MinIO ne publie plus d'images Docker gratuites
+  # depuis octobre 2025 (minio/minio et quay.io inaccessibles le 16/11/2026). SeaweedFS est une
+  # passerelle S3 compatible (licence Apache-2.0) : même API S3 côté code (FileStorage).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.50
+    container_name: smartcampus-seaweedfs
+    profiles: ["seaweedfs"]
+    restart: unless-stopped
+    command: ["server", "-dir=/data", "-s3", "-s3.port=9000", "-master.volumeSizeLimitMB=256", "-volume.max=0"]
+    ports:
+      - "127.0.0.1:${SEAWEEDFS_S3_HOST_PORT:-9000}:9000"
+    volumes:
+      - seaweedfs_data:/data
+
+  # Suivi des expériences (comparaison LLM, LoRA, STT, évals RAG ; SA-4 conventions).
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.18.0
+    container_name: smartcampus-mlflow
+    profiles: ["mlflow"]
+    restart: unless-stopped
+    # 1 seul processus : par défaut MLflow en lance 4, trop gourmand pour un poste étudiant.
+    command: ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--workers", "1",
+              "--backend-store-uri", "sqlite:////mlflow/mlflow.db",
+              "--artifacts-destination", "/mlflow/artifacts",
+              "--allowed-hosts", "localhost:*,127.0.0.1:*,mlflow:*"]
+    ports:
+      - "127.0.0.1:${MLFLOW_HOST_PORT:-5000}:5000"
+    volumes:
+      - mlflow_data:/mlflow
+
+volumes:
+  seaweedfs_data:
+  mlflow_data:

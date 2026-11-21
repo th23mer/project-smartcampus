@@ -1,0 +1,19 @@
+"""Routeur racine `/api/v1` : chaque domaine y ajoute son routeur.
+
+Pour ajouter un domaine (ex. catalogue, SA-20/21) : créer `app/api/v1/<domaine>.py`
+avec `router = APIRouter(prefix="/<chemin>", tags=["<Tag SA-5>"])`, puis l'inclure ici.
+"""
+
+from fastapi import APIRouter
+
+from app.api.v1 import health
+from app.schemas.common import ErrorResponse
+
+#: Réponses d'erreur documentées pour toutes les routes (format SA-5 §1.4).
+COMMON_ERROR_RESPONSES: dict[int | str, dict] = {
+    422: {"model": ErrorResponse, "description": "Données invalides (VALIDATION_ERROR)."},
+    500: {"model": ErrorResponse, "description": "Erreur interne (INTERNAL_ERROR)."},
+}
+
+api_router = APIRouter(responses=COMMON_ERROR_RESPONSES)
+api_router.include_router(health.router)

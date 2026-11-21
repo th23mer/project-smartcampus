@@ -1,0 +1,22 @@
+# Local-only files (backlog snapshots with teammate IDs, HAR exports with session cookies)
+.local/
+*.har
+
+# Python
+__pycache__/
+*.pyc
+
+# Secrets locaux
+.env
+*.env.local
+
+# Dépendances et artefacts de build
+.venv/
+node_modules/
+.next/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage/
+*.log

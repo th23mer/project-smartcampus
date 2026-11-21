@@ -6,7 +6,13 @@ avec `router = APIRouter(prefix="/<chemin>", tags=["<Tag SA-5>"])`, puis l'inclu
 
 from fastapi import APIRouter
 
-from app.api.v1 import health
+from app.api.v1 import (  # SA-20 : catalogue  # SA-21 : frais et conditions
+    catalogue_admission,
+    catalogue_curricula,
+    catalogue_fees,
+    catalogue_programmes,
+    health,
+)
 from app.schemas.common import ErrorResponse
 
 #: Réponses d'erreur documentées pour toutes les routes (format SA-5 §1.4).
@@ -17,3 +23,7 @@ COMMON_ERROR_RESPONSES: dict[int | str, dict] = {
 
 api_router = APIRouter(responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(health.router)
+api_router.include_router(catalogue_programmes.router)  # SA-20
+api_router.include_router(catalogue_curricula.router)  # SA-20
+api_router.include_router(catalogue_fees.router)  # SA-21
+api_router.include_router(catalogue_admission.router)  # SA-21

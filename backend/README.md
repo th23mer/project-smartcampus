@@ -5,12 +5,15 @@ FastAPI + SQLAlchemy 2 async (asyncpg) + Alembic (psycopg 3), Python 3.12 géré
 ## Démarrer
 
 ```bash
+# Depuis la racine : base PostgreSQL (SA-16), après `cp .env.example .env`
+docker compose up -d db db-test
+
 cd backend
 ~/.local/bin/uv sync                                   # crée .venv depuis uv.lock
 ~/.local/bin/uv run uvicorn app.main:app --reload --port 8000
 ```
 
-- Santé : `GET http://localhost:8000/api/v1/health` · base : `GET /api/v1/health/ready` (503 tant que la base n'est pas branchée, E2)
+- Santé : `GET http://localhost:8000/api/v1/health` · base : `GET /api/v1/health/ready`
 - Swagger : http://localhost:8000/docs · OpenAPI : `/api/v1/openapi.json`
 
 ## Configuration

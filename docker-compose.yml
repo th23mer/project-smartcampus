@@ -1,16 +1,69 @@
 # SmartCampus AI : services Docker Compose.
+# SA-16 (E2) : services `db` (développement) et `db-test` (tests automatisés).
 # SA-9  (E1) : services `backend`, `frontend`, `mailpit` (démarrés par défaut) ;
 #              `worker` (profil worker), `seaweedfs` (profil seaweedfs), `mlflow` (profil mlflow).
 #
 # Toutes les valeurs viennent du fichier `.env` (copie locale de `.env.example`, jamais commitée).
 # Ports hôtes : variables *_HOST_PORT avec valeurs standard par défaut (surcharger dans .env).
 # Lancement : make up   (ou docker compose up -d --wait)   ;   voir `make help`.
+# Base seule : docker compose up -d db db-test   puis   infra/db/check_db.sh
 
 name: smartcampus
 
+x-postgres-common: &postgres-common
+  image: pgvector/pgvector:pg16          # PostgreSQL 16 + pgvector (ADR-03, SA-4 D15)
+  restart: unless-stopped
+  environment: &postgres-env
+    # Superutilisateur d'administration : sert UNIQUEMENT aux scripts d'init et à la maintenance.
+    POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER manquant dans .env}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+    POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8 --auth-host=scram-sha-256"
+    # Mots de passe des trois rôles applicatifs (lus par infra/db/init/01-roles.sh).
+    SMARTCAMPUS_OWNER_PASSWORD: ${SMARTCAMPUS_OWNER_PASSWORD:?SMARTCAMPUS_OWNER_PASSWORD manquant dans .env}
+    SMARTCAMPUS_APP_PASSWORD: ${SMARTCAMPUS_APP_PASSWORD:?SMARTCAMPUS_APP_PASSWORD manquant dans .env}
+    SMARTCAMPUS_RAG_READER_PASSWORD: ${SMARTCAMPUS_RAG_READER_PASSWORD:?SMARTCAMPUS_RAG_READER_PASSWORD manquant dans .env}
+    TZ: Africa/Tunis
+    PGTZ: Africa/Tunis
+  healthcheck:
+    # Prêt = le serveur accepte les connexions TCP (donc les scripts d'init sont finis) ET l'init
+    # a réussi (pgcrypto, créée en dernier par 01-roles.sh, existe). Sans le 2e test, une init
+    # ratée laisserait un volume à moitié initialisé que le conteneur redémarré dirait « healthy ».
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" && psql -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -tAc \"SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'\" | grep -q 1"]
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 20s
+
 services:
+  db:
+    <<: *postgres-common
+    container_name: smartcampus-db
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: ${POSTGRES_DB:-smartcampus}
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+
+  db-test:
+    <<: *postgres-common
+    container_name: smartcampus-db-test
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-smartcampus_test}
+    ports:
+      - "127.0.0.1:${DB_TEST_HOST_PORT:-5433}:5432"
+    # Base de test jetable : données en mémoire, réinitialisée à chaque redémarrage du conteneur.
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+
   # ------------------------------------------------------------------------------------------
-  # SA-9 : application. La base PostgreSQL (services db / db-test) arrive avec E2 (SA-16).
+  # SA-9 : application. Dans les conteneurs, la base est joignable à db:5432 / db-test:5432
+  # (réseau Compose), quel que soit le port publié sur l'hôte.
   # ------------------------------------------------------------------------------------------
   backend:
     build:
@@ -24,7 +77,11 @@ services:
     image: smartcampus-backend:dev
     container_name: smartcampus-backend
     restart: unless-stopped
-    # Liste EXPLICITE des variables transmises au conteneur. Ajouter ici toute nouvelle variable du backend
+    depends_on:
+      db:
+        condition: service_healthy
+    # Liste EXPLICITE des variables : le mot de passe superutilisateur (POSTGRES_PASSWORD) n'entre
+    # jamais dans le conteneur de l'appli. Ajouter ici toute nouvelle variable du backend
     # (ex. clé d'API du LLM, E4) en plus de .env.example.
     environment: &backend-env
       APP_ENV: ${APP_ENV:-dev}
@@ -32,6 +89,12 @@ services:
       LOG_JSON: ${LOG_JSON:-false}
       # Le navigateur appelle l'API depuis l'origine du frontend publiée sur l'hôte.
       CORS_ORIGINS: '["http://localhost:${FRONTEND_HOST_PORT:-3000}","http://127.0.0.1:${FRONTEND_HOST_PORT:-3000}"]'
+      DATABASE_URL: postgresql+asyncpg://smartcampus_app:${SMARTCAMPUS_APP_PASSWORD}@db:5432/${POSTGRES_DB:-smartcampus}
+      MIGRATION_DATABASE_URL: postgresql+psycopg://smartcampus_owner:${SMARTCAMPUS_OWNER_PASSWORD}@db:5432/${POSTGRES_DB:-smartcampus}
+      RAG_READER_DATABASE_URL: postgresql+asyncpg://smartcampus_rag_reader:${SMARTCAMPUS_RAG_READER_PASSWORD}@db:5432/${POSTGRES_DB:-smartcampus}
+      TEST_DATABASE_URL: postgresql+asyncpg://smartcampus_app:${SMARTCAMPUS_APP_PASSWORD}@db-test:5432/${POSTGRES_TEST_DB:-smartcampus_test}
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://smartcampus_owner:${SMARTCAMPUS_OWNER_PASSWORD}@db-test:5432/${POSTGRES_TEST_DB:-smartcampus_test}
+      TEST_RAG_READER_DATABASE_URL: postgresql+asyncpg://smartcampus_rag_reader:${SMARTCAMPUS_RAG_READER_PASSWORD}@db-test:5432/${POSTGRES_TEST_DB:-smartcampus_test}
       # E-mails sortants (jobs `email`, E3/E5) : capturés par Mailpit en dev, rien ne part.
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
@@ -59,6 +122,9 @@ services:
     container_name: smartcampus-worker
     profiles: ["worker"]
     restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
     environment: *backend-env
     volumes:
       - ./backend:/app
@@ -144,5 +210,6 @@ services:
       - mlflow_data:/mlflow
 
 volumes:
+  db_data:
   seaweedfs_data:
   mlflow_data:

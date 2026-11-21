@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Annotated
 
 # Avant tout import de l'application : environnement de test, sans base configurée.
 os.environ["APP_ENV"] = "test"
 os.environ.pop("DATABASE_URL", None)
 
+import psycopg
 import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -123,3 +127,92 @@ def dev_headers(
 
 
 # --- Base de test partagée (SA-22, performance) -------------------------------------------------
+# Une seule remise à zéro du schéma par session, un seul chargement du seed de démo : les
+# modules qui en ont besoin demandent ces fixtures au lieu de refaire downgrade / upgrade / seed.
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+SEED_SCRIPT = BACKEND_DIR / "scripts" / "seed.py"
+
+
+def db_test_env(name: str) -> str:
+    """Variable de la base de test (SA-16) ; test sauté si elle manque."""
+    value = os.environ.get(name)
+    if not value:
+        pytest.skip(f"{name} non définie (base de test SA-16 requise)")
+    return value
+
+
+def plain_url(url: str) -> str:
+    """URL SQLAlchemy (`postgresql+asyncpg://`, `postgresql+psycopg://`) → URL libpq."""
+    scheme, rest = url.split("://", 1)
+    return "postgresql://" + rest if scheme.startswith("postgresql") else url
+
+
+def run_python(args: list[str], **env: str) -> subprocess.CompletedProcess[str]:
+    """Lance `python <args>` depuis backend/ (alembic, seed : réglages isolés)."""
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=BACKEND_DIR,
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def reset_schema() -> None:
+    """db-test vide puis `upgrade head` (rôle propriétaire)."""
+    url = db_test_env("TEST_MIGRATION_DATABASE_URL")
+    for step in (("downgrade", "base"), ("upgrade", "head")):
+        res = run_python(["-m", "alembic", *step], MIGRATION_DATABASE_URL=url)
+        assert res.returncode == 0, res.stderr
+
+
+def table_counts(url: str) -> dict[str, int]:
+    """Nombre de lignes de chaque table du schéma public."""
+    with psycopg.connect(url) as conn:
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                " AND tablename <> 'alembic_version' ORDER BY 1"
+            )
+        ]
+        return {t: conn.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0] for t in tables}
+
+
+@pytest.fixture(scope="session")
+def test_db_schema() -> str:
+    """Schéma remis à zéro **une fois par session** ; chaque test s'isole ensuite par une
+    transaction annulée. Renvoie l'URL du rôle propriétaire."""
+    reset_schema()
+    return db_test_env("TEST_MIGRATION_DATABASE_URL")
+
+
+@pytest.fixture(scope="session")
+def demo_seed(test_db_schema: str) -> Iterator[dict]:
+    """Seed de démo SA-18 chargé **une fois par session** (deux passes pour l'idempotence).
+
+    Utilisé par `tests/test_seed.py` et `tests/verification/test_bout_en_bout_demo.py`. Les
+    lignes publiées étant figées, db-test est remise à vide en fin de session.
+    """
+    app_url = db_test_env("TEST_DATABASE_URL")
+    url = plain_url(app_url)
+    if any(table_counts(url).values()):  # base non vide (autre module) : on repart de zéro
+        reset_schema()
+    try:
+        first = run_python([str(SEED_SCRIPT), "--database-url", app_url])
+        assert first.returncode == 0, first.stderr
+        counts_1 = table_counts(url)
+        second = run_python([str(SEED_SCRIPT), "--database-url", app_url])
+        assert second.returncode == 0, second.stderr
+        counts_2 = table_counts(url)
+        yield {
+            "first": first.stdout,
+            "second": second.stdout,
+            "counts_1": counts_1,
+            "counts_2": counts_2,
+            "url": url,
+        }
+    finally:
+        reset_schema()

@@ -16,6 +16,7 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.db import dispose_engine
 from app.core.errors import register_error_handlers
+from app.core.idempotency import IdempotencyMiddleware
 from app.core.logging import configure_logging
 from app.core.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 
@@ -27,6 +28,9 @@ universitaire (IIT Sfax · ISB).
 * **Format d'erreur unique** : `{"error": {"code", "message", "details", "request_id"}}`.
 * Chaque réponse porte l'en-tête `X-Request-ID` (à citer au support).
 * Listes paginées : `?page=1&page_size=20` (max 100).
+* **Idempotence** : en-tête `Idempotency-Key` (UUID) obligatoire sur les `POST` du catalogue
+  staff ; même clé + même requête dans les 24 h → réponse rejouée (`Idempotent-Replayed: true`),
+  corps différent ou requête en cours → `409 IDEMPOTENCY_KEY_CONFLICT`.
 * **Authentification simulée en dev/test** : en-têtes `X-Dev-User-Id` (UUID),
   `X-Dev-Roles` (ex. `candidate` ou `iit_academic_lead,interview_lead`) et
   `X-Dev-Institution-Id` (facultatif). Elle sera remplacée par l'authentification
@@ -67,6 +71,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_error_handlers(app)
     # Ordre : le dernier ajouté est le plus externe. CORS enveloppe RequestId pour que
     # même les 500 produites par RequestIdMiddleware reçoivent les en-têtes CORS.
+    # Idempotence (SA-22) à l'intérieur de RequestId : ses réponses (rejeu, 409, 422) portent
+    # le X-Request-ID et le format d'erreur SA-5.
+    app.add_middleware(IdempotencyMiddleware, api_prefix=settings.api_prefix)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -74,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=[REQUEST_ID_HEADER, "ETag", "Retry-After"],
+        expose_headers=[REQUEST_ID_HEADER, "ETag", "Retry-After", "Idempotent-Replayed"],
     )
 
     app.include_router(api_router, prefix=settings.api_prefix)

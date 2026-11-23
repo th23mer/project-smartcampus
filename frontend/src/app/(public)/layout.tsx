@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { BackendStatus } from "@/components/app/backend-status";
+import { AccountMenu } from "@/components/auth/account-menu";
 
 /** Mise en page publique (visiteur) : en-tête léger, pied de page. */
 export default function PublicLayout({ children }: { children: ReactNode }) {
@@ -16,6 +17,7 @@ export default function PublicLayout({ children }: { children: ReactNode }) {
           <Link href="/candidat" className="text-muted-foreground hover:text-foreground">
             Espace candidat
           </Link>
+          <AccountMenu />
         </nav>
       </header>
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 pb-10">{children}</main>

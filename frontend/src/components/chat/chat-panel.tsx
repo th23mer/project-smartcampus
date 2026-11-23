@@ -3,17 +3,19 @@
 /**
  * Composant de conversation : bulles, puces d'outils, cartes sources (F1),
  * secours déterministe, zone de saisie et bouton micro (désactivé pour l'instant).
- * Branché sur le faux flux local tant que l'endpoint d'E4 n'existe pas.
+ * Branché sur l'API (session visiteur + conversation, E3) ; faux flux local si
+ * `NEXT_PUBLIC_CHAT_MOCK=true`.
  */
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Loader2, Mic, RotateCcw, SendHorizontal, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { SourceCard } from "./source-card";
-import type { ToolCall } from "@/lib/api/chat-types";
+import type { SuggestedAction, ToolCall } from "@/lib/api/chat-types";
 import { initialTurnState, type ChatTurnState } from "@/lib/api/sse";
-import { apiErrorFromException, userMessage } from "@/lib/api/errors";
+import { ApiError, apiErrorFromException, userMessage } from "@/lib/api/errors";
 import { chatUsesMock, sendChatMessage } from "@/lib/chat/transport";
 import { cn } from "@/lib/utils";
 import { isDev } from "@/lib/config";
@@ -46,6 +48,22 @@ function ToolChip({ call }: { call: ToolCall }) {
       {call.display_label}
       {call.kind === "deterministic" && <span className="text-[10px] opacity-70">· code</span>}
     </span>
+  );
+}
+
+/** Action proposée : « créer un compte » est active, les autres arrivent avec E4 / E5. */
+function ActionButton({ action }: { action: SuggestedAction }) {
+  if (action.type === "create_account") {
+    return (
+      <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+        <Link href="/inscription">{action.label}</Link>
+      </Button>
+    );
+  }
+  return (
+    <Button size="sm" variant="outline" className="h-7 text-xs" disabled title="Bientôt disponible">
+      {action.label}
+    </Button>
   );
 }
 
@@ -90,29 +108,42 @@ function AssistantTurn({ turn, onRetry }: { turn: Turn; onRetry: () => void }) {
             Assistant indisponible · réponse de secours
           </p>
           <p>{state.fallback.text}</p>
-          <ul className="mt-2 list-disc ps-5 text-xs">
-            {state.fallback.links.map((l) => (
-              <li key={l.title}>{l.title}</li>
-            ))}
-          </ul>
+          {state.fallback.links.length > 0 && (
+            <ul className="mt-2 list-disc ps-5 text-xs">
+              {state.fallback.links.map((l) => (
+                <li key={l.title}>{l.title}</li>
+              ))}
+            </ul>
+          )}
+          {state.fallback.suggested_actions.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {state.fallback.suggested_actions.map((a) => (
+                <ActionButton key={a.type} action={a} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {state.error && (
-        <div className="flex items-center gap-2 text-xs text-red-700 dark:text-red-400" role="alert">
+      {state.error && state.status !== "fallback" && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-red-700 dark:text-red-400" role="alert">
           <span>{userMessage(state.error)}</span>
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onRetry}>
-            <RotateCcw className="size-3.5" /> Réessayer
-          </Button>
+          {state.error instanceof ApiError && state.error.code === "VISITOR_QUOTA_EXCEEDED" ? (
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+              <Link href="/inscription">Créer un compte pour continuer</Link>
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onRetry}>
+              <RotateCcw className="size-3.5" /> Réessayer
+            </Button>
+          )}
         </div>
       )}
 
       {state.assistantMessage?.suggested_actions && state.assistantMessage.suggested_actions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {state.assistantMessage.suggested_actions.map((a) => (
-            <Button key={a.type} size="sm" variant="outline" className="h-7 text-xs" disabled title="Bientôt disponible">
-              {a.label}
-            </Button>
+            <ActionButton key={a.type} action={a} />
           ))}
         </div>
       )}
@@ -127,6 +158,8 @@ export function ChatPanel({ className }: { className?: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const keyRef = useRef(0);
+
+  const quota = [...turns].reverse().find((t) => t.state.quota)?.state.quota ?? null;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -188,11 +221,22 @@ export function ChatPanel({ className }: { className?: string }) {
           <p className="text-sm font-semibold">Assistant d&apos;orientation</p>
           <p className="text-xs text-muted-foreground">Français · tunisien · arabizi</p>
         </div>
-        {chatUsesMock && (
-          <Badge variant="outline" className="text-[10px]">
-            Flux simulé
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {quota && (
+            <Badge
+              variant="outline"
+              className="text-[10px]"
+              title="Messages sans compte sur 24 h : crée un compte pour continuer sans limite."
+            >
+              {quota.messages_used}/{quota.messages_limit} messages
+            </Badge>
+          )}
+          {chatUsesMock && (
+            <Badge variant="outline" className="text-[10px]">
+              Flux simulé
+            </Badge>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4" aria-live="polite">

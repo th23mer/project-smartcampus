@@ -53,7 +53,7 @@ from app.models.documents import (
     DocumentVersion,
     EmbeddingModel,
 )
-from app.models.identity import Consent, Role, UserAccount, UserRole
+from app.models.identity import Consent, RefreshToken, Role, UserAccount, UserRole
 from app.models.jobs import Job, SyncJob
 from app.models.knowledge import KnowledgeGap, KnowledgeGapQuestion
 from app.models.process import (
@@ -118,6 +118,7 @@ __all__ = [
     "Programme",
     "Recommendation",
     "RecommendationItem",
+    "RefreshToken",
     "Role",
     "Speciality",
     "StatusHistory",

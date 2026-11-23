@@ -31,16 +31,22 @@ universitaire (IIT Sfax · ISB).
 * **Idempotence** : en-tête `Idempotency-Key` (UUID) obligatoire sur les `POST` du catalogue
   staff ; même clé + même requête dans les 24 h → réponse rejouée (`Idempotent-Replayed: true`),
   corps différent ou requête en cours → `409 IDEMPOTENCY_KEY_CONFLICT`.
-* **Authentification simulée en dev/test** : en-têtes `X-Dev-User-Id` (UUID),
-  `X-Dev-Roles` (ex. `candidate` ou `iit_academic_lead,interview_lead`) et
-  `X-Dev-Institution-Id` (facultatif). Elle sera remplacée par l'authentification
-  JWT d'E3 sans changer les routes.
+* **Authentification (E3)** : `POST /auth/login` renvoie un jeton d'accès JWT (15 min) à
+  passer en `Authorization: Bearer <jeton>` (bouton **Authorize**) ; le cookie `sc_refresh`
+  le renouvelle (`POST /auth/refresh`). Les visiteurs sans compte sont identifiés par le
+  cookie `sc_visitor` (`POST /visitor-sessions`).
+* **Authentification simulée en dev/test** (sans en-tête `Authorization`) : en-têtes
+  `X-Dev-User-Id` (UUID), `X-Dev-Roles` (ex. `candidate` ou
+  `iit_academic_lead,interview_lead`) et `X-Dev-Institution-Id` (facultatif).
 
 Contrats de référence : SA-5 (spécification OpenAPI sur `/api/v1/openapi.json`).
 """
 
 OPENAPI_TAGS = [
     {"name": "Système", "description": "Sondes de santé et de disponibilité."},
+    {"name": "Authentification", "description": "Comptes, jetons et rattachement (SA-28, SA-29)."},
+    {"name": "Sessions visiteur", "description": "Chat sans compte : session temporaire (SA-25)."},
+    {"name": "Conversations et chat", "description": "Conversations et mémoire (SA-26)."},
 ]
 
 

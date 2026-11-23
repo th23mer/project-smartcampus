@@ -10,7 +10,7 @@ from tests.models.conftest import run_alembic
 
 pytestmark = pytest.mark.db
 
-HEAD = "0005_revisions"  # SA-20 : révisions (17/11)
+HEAD = "0006_refresh_token"  # SA-28 : jetons de renouvellement (23/11)
 VIEWS = {"v_searchable_chunk", "v_document_index_state", "v_pending_validation"}
 
 
@@ -48,7 +48,7 @@ def test_upgrade_head_sur_base_vide(migrated: str) -> None:
         for mp in Base.registry.mappers
         if mp.class_.__module__.startswith("app.models.")
     }
-    assert len(expected) == 53  # + catalogue_revision (SA-20, 0005)
+    assert len(expected) == 54  # + catalogue_revision (SA-20, 0005), refresh_token (SA-28, 0006)
     assert tables == expected | {"alembic_version"}
     assert views == VIEWS
     assert functions == {
@@ -79,7 +79,7 @@ def test_downgrade_base_puis_upgrade_head(migrated: str) -> None:
     up = run_alembic("upgrade", "head")
     assert up.returncode == 0, up.stderr
     tables, views, _ = _objects(migrated)
-    assert len(tables) == 54 and views == VIEWS
+    assert len(tables) == 55 and views == VIEWS
 
 
 def test_sql_hors_ligne_genere(migrated: str) -> None:

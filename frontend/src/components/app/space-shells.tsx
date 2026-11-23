@@ -16,6 +16,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { SpaceShell, type NavItem } from "./space-shell";
+import { RequireRole } from "@/components/auth/require-role";
 
 const CANDIDATE_NAV: NavItem[] = [
   { href: "/candidat", label: "Tableau de bord", icon: LayoutDashboard },
@@ -35,7 +36,7 @@ const STAFF_NAV: NavItem[] = [
 export function CandidateShell({ children }: { children: ReactNode }) {
   return (
     <SpaceShell spaceLabel="Espace candidat" accentClass="bg-sky-600" nav={CANDIDATE_NAV}>
-      {children}
+      <RequireRole space="candidate">{children}</RequireRole>
     </SpaceShell>
   );
 }
@@ -43,7 +44,7 @@ export function CandidateShell({ children }: { children: ReactNode }) {
 export function StaffShell({ children }: { children: ReactNode }) {
   return (
     <SpaceShell spaceLabel="Console staff" accentClass="bg-violet-600" nav={STAFF_NAV}>
-      {children}
+      <RequireRole space="staff">{children}</RequireRole>
     </SpaceShell>
   );
 }

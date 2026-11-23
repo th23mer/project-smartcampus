@@ -17,7 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -78,6 +78,58 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10, ge=0)
     db_echo: bool = False
     db_ready_timeout_s: float = Field(default=2.0, gt=0)
+
+    # --- Authentification (SA-28, E3) : SA-5 §1.2, décision D3 ---
+    #: Secret de signature HS256 des jetons d'accès (≥ 32 caractères, uniquement par l'env).
+    #: Absent : connexion et inscription répondent 503, tout jeton Bearer est refusé.
+    jwt_secret: SecretStr | None = None
+    jwt_issuer: str = "smartcampus-ai"
+    #: Jeton d'accès : 15 min (SA-5 §1.2).
+    access_token_ttl_s: int = Field(default=900, gt=0)
+    #: Jeton de renouvellement (cookie `sc_refresh`) : 7 jours, rotation à chaque usage.
+    refresh_token_ttl_days: int = Field(default=7, gt=0)
+    #: Cookies `Secure` ; None = automatique (désactivé en dev/test, actif ailleurs).
+    cookie_secure: bool | None = None
+    #: Anti-force brute de la connexion : 5 échecs / 15 min / IP + e-mail (SA-5).
+    login_max_failures: int = Field(default=5, gt=0)
+    login_window_s: int = Field(default=900, gt=0)
+    #: Version de la politique de confidentialité inscrite dans le journal des consentements.
+    consent_policy_version: str = "2026-11"
+
+    # --- Sessions visiteur et mémoire (SA-25, SA-26) : décision D-D ---
+    visitor_idle_ttl_h: int = Field(default=24, gt=0)
+    visitor_max_lifetime_days: int = Field(default=7, gt=0)
+    #: Quota : 30 messages par fenêtre de 24 h.
+    visitor_message_quota: int = Field(default=30, gt=0)
+    visitor_quota_window_h: int = Field(default=24, gt=0)
+    #: Purge des sessions expirées (et de leurs conversations) 30 jours après l'expiration.
+    visitor_purge_after_days: int = Field(default=30, gt=0)
+    #: Mémoire de travail transmise à l'agent : N derniers messages de la conversation.
+    memory_context_messages: int = Field(default=20, gt=0)
+    message_max_chars: int = Field(default=2000, gt=0)
+    #: Durée de validité d'une offre de rattachement (SA-29).
+    attach_offer_ttl_min: int = Field(default=30, gt=0)
+
+    @field_validator("jwt_secret", mode="before")
+    @classmethod
+    def _empty_jwt_secret(cls, value: object) -> object:
+        """Variable vide (compose sans JWT_SECRET) = absente."""
+        return None if value == "" else value
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _check_jwt_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 32:
+            raise ValueError("JWT_SECRET doit contenir au moins 32 caractères.")
+        return value
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cookies_secure(self) -> bool:
+        """Attribut `Secure` des cookies (HTTPS) : actif hors dev/test sauf réglage explicite."""
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.app_env not in DEV_AUTH_ENVS
 
     @field_validator("database_url")
     @classmethod

@@ -3,7 +3,10 @@
 Pour chaque opération déclarée :
 - route staff (`/staff/...`) : visiteur → 401 UNAUTHENTICATED, candidat → 403 FORBIDDEN,
   responsable entretiens (absent de la matrice catalogue) → 403 ;
-- route publique (`/catalogue/...`, `/health`) : répond sans authentification (jamais 401/403) ;
+- route publique (`/catalogue/...`, `/health`, inscription, connexion) : répond sans
+  authentification (jamais 401/403) ;
+- route identifiée d'E3 (`/auth/*` sauf inscription/connexion, `/visitor-sessions/current`,
+  `/conversations/...`) : sans jeton ni cookie visiteur → 401 UNAUTHENTICATED ;
 - toute erreur a l'enveloppe `{"error": {code, message, details, request_id}}` et
   `request_id` = en-tête `X-Request-ID` ;
 - documentation : chaque POST staff déclare `Idempotency-Key`, chaque PATCH staff `If-Match`
@@ -42,7 +45,18 @@ def _operations() -> list[tuple[str, str, dict[str, Any]]]:
 
 OPERATIONS = _operations()
 STAFF = [(m, p, op) for m, p, op in OPERATIONS if p.startswith("/staff/")]
-PUBLIC = [(m, p, op) for m, p, op in OPERATIONS if not p.startswith("/staff/")]
+#: Routes d'E3 qui exigent un jeton Bearer ou le cookie visiteur `sc_visitor` (SA-5 §1.2).
+_OPEN_E3 = {("POST", "/auth/register"), ("POST", "/auth/login"), ("POST", "/visitor-sessions")}
+IDENTIFIED = [
+    (m, p, op)
+    for m, p, op in OPERATIONS
+    if p.startswith(("/auth/", "/visitor-sessions", "/conversations")) and (m, p) not in _OPEN_E3
+]
+PUBLIC = [
+    (m, p, op)
+    for m, p, op in OPERATIONS
+    if not p.startswith("/staff/") and (m, p, op) not in IDENTIFIED
+]
 
 
 def _id(op: tuple[str, str, Any]) -> str:
@@ -122,6 +136,20 @@ async def test_route_publique_sans_authentification(api, method: str, path: str,
     # Un candidat connecté voit la même chose (aucune route publique ne dépend du rôle).
     r2 = await call(api, method, path, headers=h("candidate"), **kw)
     assert r2.status_code not in (401, 403)
+
+
+@pytest.mark.parametrize(("method", "path", "op"), IDENTIFIED, ids=[_id(o) for o in IDENTIFIED])
+async def test_route_identifiee_refuse_anonyme(api, method: str, path: str, op: dict):
+    """E3 : ni jeton ni cookie visiteur → 401 au format unique, jamais 500."""
+    kw: dict[str, Any] = {"json": {}} if method == "POST" else {}
+    r = await call(api, method, path, **kw)
+    assert r.status_code == 401, r.text
+    assert "X-Request-ID" in r.headers
+    assert_error_envelope(r)
+    # Jeton Bearer invalide : 401, jamais 500.
+    r = await call(api, method, path, headers={"Authorization": "Bearer pas-un-jwt"}, **kw)
+    assert r.status_code == 401, r.text
+    assert_error_envelope(r)
 
 
 def _header_names(op: dict) -> set[str]:

@@ -3,7 +3,8 @@
  *
  * Le backend (SA-7) accepte les en-têtes `X-Dev-User-Id` et `X-Dev-Roles`
  * seulement si `APP_ENV=dev|test`. Le front ne les envoie que si
- * `NEXT_PUBLIC_APP_ENV=dev`. E3 remplacera ce mécanisme par le vrai jeton Bearer.
+ * `NEXT_PUBLIC_APP_ENV=dev`. Un utilisateur réellement connecté (jeton Bearer, E3) passe
+ * avant : le client n'envoie alors plus ces en-têtes.
  */
 import type { DevRole, StaffRole } from "./types";
 

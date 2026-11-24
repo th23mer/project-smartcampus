@@ -1,22 +1,22 @@
-"""Interface d'authentification et de contrôle des rôles (SA-7).
+"""Interface d'authentification et de contrôle des rôles (SA-7, implémentation SA-28).
 
-**Interface stable** utilisée par les routes (ne change pas quand E3 livre la vraie auth) :
+**Interface stable** utilisée par les routes :
 
-- `CurrentUser` : utilisateur authentifié (id, rôles, institution_id) ;
+- `CurrentUser` : utilisateur authentifié (id, rôles, institution_id, candidate_id) ;
 - `get_current_user` : dépendance, 401 UNAUTHENTICATED si personne n'est identifié ;
 - `get_optional_user` : dépendance, `None` si anonyme (routes publiques personnalisables) ;
 - `require_roles(*roles)` : dépendance, 403 FORBIDDEN si aucun des rôles n'est détenu.
 
-**Implémentation actuelle : simulée** (`DevHeaderAuthBackend`), active seulement si
-`APP_ENV` vaut `dev` ou `test`. Elle lit les en-têtes :
+**Implémentation (SA-28, E3)** : `JwtAuthBackend` lit `Authorization: Bearer <jeton>`
+(JWT HS256 signé avec `JWT_SECRET`, 15 min ; voir `app/core/tokens.py`). Sans cet en-tête :
 
-- `X-Dev-User-Id` : UUID de l'utilisateur (obligatoire) ;
-- `X-Dev-Roles` : rôles séparés par des virgules, ex. `iit_academic_lead,interview_lead` ;
-- `X-Dev-Institution-Id` : UUID de l'institution (facultatif, périmètre du staff).
+- en `dev` et `test`, l'authentification simulée `DevHeaderAuthBackend` reste disponible
+  (en-têtes `X-Dev-User-Id`, `X-Dev-Roles`, `X-Dev-Institution-Id`) pour les tests et le
+  sélecteur de rôle du front ;
+- ailleurs, l'appelant est anonyme.
 
-Dans les autres environnements, `NoAuthBackend` est utilisé (tout appel protégé → 401)
-tant qu'E3 (Mariem) n'a pas branché le backend JWT via `set_auth_backend(...)`.
-Les visiteurs sans compte (cookie `sc_visitor`) relèvent des sessions visiteur d'E3.
+`set_auth_backend(...)` permet toujours de brancher une autre stratégie (tests).
+Les visiteurs sans compte (cookie `sc_visitor`) sont identifiés par `app/core/visitor.py`.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Protocol
 
 from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict
 
 from app.core.config import Settings, get_settings
@@ -57,6 +58,8 @@ class CurrentUser(BaseModel):
     roles: frozenset[Role]
     #: Périmètre institutionnel (IIT/ISB) des responsables ; None = tous / sans objet.
     institution_id: uuid.UUID | None = None
+    #: Profil candidat (`candidate_profile.id`) s'il existe déjà ; None sinon.
+    candidate_id: uuid.UUID | None = None
 
     @property
     def account_type(self) -> str:
@@ -126,6 +129,37 @@ class DevHeaderAuthBackend:
         )
 
 
+class JwtAuthBackend:
+    """Jeton d'accès `Authorization: Bearer` (SA-28) ; sans en-tête, délègue à `fallback`."""
+
+    def __init__(self, settings: Settings, fallback: AuthBackend | None = None) -> None:
+        self.settings = settings
+        self.fallback = fallback
+
+    async def authenticate(self, request: Request) -> CurrentUser | None:
+        header = request.headers.get("Authorization")
+        if header is None:
+            return await self.fallback.authenticate(request) if self.fallback else None
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise _unauthenticated({"header": "Authorization", "issue": "invalid_scheme"})
+        from app.core.tokens import decode_access_token
+
+        claims = decode_access_token(self.settings, token.strip())
+        try:
+            roles = frozenset(Role(name) for name in claims.roles)
+        except ValueError as exc:
+            raise _unauthenticated({"reason": "invalid_token"}) from exc
+        if not roles:
+            raise _unauthenticated({"reason": "invalid_token"})
+        return CurrentUser(
+            id=claims.user_id,
+            roles=roles,
+            institution_id=claims.institution_id,
+            candidate_id=claims.candidate_id,
+        )
+
+
 def _unauthenticated(details: dict[str, Any] | None = None) -> AppError:
     return AppError(ErrorCode.UNAUTHENTICATED, details=details)
 
@@ -134,22 +168,33 @@ _auth_backend_override: AuthBackend | None = None
 
 
 def set_auth_backend(backend: AuthBackend | None) -> None:
-    """Branche une autre implémentation (E3 : backend JWT). `None` = retour au défaut."""
+    """Branche une autre implémentation (tests). `None` = retour au défaut."""
     global _auth_backend_override
     _auth_backend_override = backend
 
 
 def resolve_auth_backend(settings: Settings) -> AuthBackend:
-    """Backend actif : celui d'E3 s'il est branché, sinon simulé (dev/test) ou aucun."""
+    """Backend actif : celui branché par `set_auth_backend`, sinon JWT (+ en-têtes simulés
+    en dev/test)."""
     if _auth_backend_override is not None:
         return _auth_backend_override
-    if settings.dev_auth_enabled:
-        return DevHeaderAuthBackend()
-    return NoAuthBackend()
+    fallback = DevHeaderAuthBackend() if settings.dev_auth_enabled else None
+    return JwtAuthBackend(settings, fallback)
+
+
+#: Déclare le schéma « Bearer » dans OpenAPI (bouton Authorize de Swagger). La vérification
+#: est faite par le backend d'authentification, pas par cet objet.
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="bearerAuth",
+    description="Jeton d'accès renvoyé par POST /auth/login (15 min).",
+)
 
 
 async def get_optional_user(
-    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+    _bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)] = None,
 ) -> CurrentUser | None:
     """Utilisateur courant ou `None` (anonyme)."""
     return await resolve_auth_backend(settings).authenticate(request)

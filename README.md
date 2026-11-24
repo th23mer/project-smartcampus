@@ -4,7 +4,7 @@ Plateforme conversationnelle et agentique d'orientation universitaire (IIT / ISB
 
 Projet du cours d'IA générative, 3e année génie informatique, IIT Sfax, 2026-2027.
 
-> **État actuel (sprint « Socle Technique »)** : base de données, API du catalogue (formations, cursus, frais, conditions d'admission), squelette du frontend et environnement Docker. Le chat avec le LLM, le RAG et l'authentification réelle arrivent dans les sprints suivants : en attendant, le chat du frontend utilise un **flux simulé** et l'identité est **simulée** (voir § 5).
+> **État actuel (sprint « Socle Technique »)** : base de données, API du catalogue (formations, cursus, frais, conditions d'admission), squelette du frontend, environnement Docker, et (E3) **chat sans compte avec session visiteur et mémoire, connexion / inscription, rattachement de la conversation au compte**. Le LLM et le RAG arrivent avec E4 : en attendant, l'assistant répond par un **message de secours** (voir § 5).
 
 ---
 
@@ -53,11 +53,21 @@ Si vous changez `DB_HOST_PORT`, changez aussi le port dans `DATABASE_URL`, `MIGR
 
 ## 3. Utiliser l'application (frontend)
 
-Ouvrir http://localhost:3000. En haut de page, le **sélecteur de rôle** (mode dev) permet de changer d'identité sans compte :
+Ouvrir http://localhost:3000.
+
+**Comptes réels (E3)** :
+
+- le chat de l'accueil fonctionne **sans compte** : au premier message, une session visiteur et une conversation sont créées (cookie httpOnly) ; le compteur « n/30 messages » s'affiche. Sans LLM branché, l'assistant répond par le **message de secours** (E4 branchera le modèle) ;
+- **Se connecter** (`/connexion`) ou **Créer un compte** (`/inscription`, compte candidat, deux accords obligatoires) ;
+- après connexion, si tu as discuté avant, la fenêtre **« Garder ta conversation ? »** demande ton accord (SA-29) ; « Oui » enregistre la conversation dans ton compte ;
+- `/candidat` et `/staff` demandent une connexion avec le bon rôle ; la session est retrouvée au rechargement de la page, **Se déconnecter** la ferme ;
+- compte staff : `make shell-backend` puis `uv run python scripts/create_staff.py --email … --full-name … --roles iit_academic_lead` (après `make seed`).
+
+**Sélecteur de rôle** (mode dev, en bas à droite) : il reste disponible pour parcourir les espaces sans compte, par en-têtes simulés (ignorés dès qu'un utilisateur est connecté) :
 
 | Identité | Espace | Pages |
 |---|---|---|
-| Visiteur (sans compte) | `/` | Accueil et chat de démonstration (flux simulé) |
+| Visiteur (sans compte) | `/` | Accueil et chat |
 | Candidat | `/candidat` | Tableau de bord, profil, pré-inscription, rendez-vous |
 | Staff (responsable IIT, ISB, entretiens, direction, admin) | `/staff` | Tableau de bord, catalogue, validations, documents, radar des lacunes |
 
@@ -120,6 +130,33 @@ curl http://localhost:8000/api/v1/staff/catalogue/programmes \
 - **Supprimer** n'est possible que pour un brouillon ; une donnée publiée s'archive.
 - Les modifications utilisent l'en-tête `If-Match` (version reçue dans l'`ETag`) pour éviter d'écraser le travail d'un autre.
 
+### Visiteurs, comptes et conversations (E3 : SA-25, SA-26, SA-28, SA-29)
+
+Pré-requis : `JWT_SECRET` (32 caractères minimum) dans `.env`, puis `make migrate` (révision `0006`).
+Dans Swagger (`/docs`), les cookies sont gérés par le navigateur ; le jeton d'accès se colle dans **Authorize**.
+
+| Tâche | Routes | Règles |
+|---|---|---|
+| SA-25 Sessions visiteur | `POST /visitor-sessions`, `GET` / `DELETE /visitor-sessions/current` | cookie `sc_visitor` (httpOnly, jeton haché en base) ; session réutilisée par le même navigateur ; 24 h d'inactivité, 7 j max ; 30 messages / 24 h (`429 VISITOR_QUOTA_EXCEEDED`) ; « oublier ma session » ; purge 30 j après expiration (`python -m app.jobs.purge_visitor_sessions`) |
+| SA-26 Mémoire | `POST` / `GET /conversations`, `GET /conversations/{id}`, `GET` / `POST /conversations/{id}/messages` | messages dans `message` ; chacun ne voit que ses conversations (404 sinon) ; envoi idempotent par `client_message_id` ; quota compté dans la même transaction ; contexte de l'agent = 20 derniers messages ; sans LLM branché : `503 LLM_UNAVAILABLE` + secours déterministe, message conservé |
+| SA-28 Authentification | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `GET /auth/me` | inscription publique = candidat ; Argon2id ; JWT 15 min + cookie `sc_refresh` 7 j avec rotation ; 5 échecs / 15 min → 429 ; comptes staff : `uv run python scripts/create_staff.py --email … --full-name … --roles iit_academic_lead` |
+| SA-29 Rattachement | `attach_offer` à l'inscription / connexion, puis `POST /auth/attach-visitor-session` | jeton candidat **et** cookie de la même session ; `consent` booléen strict ; refus = rien ne bouge ; accord = conversations déplacées vers le compte, consentement journalisé ; un seul propriétaire (409) |
+
+Exemple rapide (curl garde les cookies dans `jar.txt`) :
+
+```bash
+API=http://localhost:8000/api/v1
+curl -s -c jar.txt -b jar.txt -X POST $API/visitor-sessions -H 'Content-Type: application/json' -d '{}'
+CONV=$(curl -s -c jar.txt -b jar.txt -X POST $API/conversations -H 'Content-Type: application/json' -d '{}' | jq -r .id)
+curl -s -c jar.txt -b jar.txt -X POST $API/conversations/$CONV/messages -H 'Content-Type: application/json' \
+  -d "{\"client_message_id\": \"$(uuidgen)\", \"content\": {\"type\": \"text\", \"text\": \"Bonjour\"}}"
+curl -s -c jar.txt -b jar.txt -X POST $API/auth/register -H 'Content-Type: application/json' \
+  -d '{"email":"candidat@example.com","password":"MotDePasse-2026","full_name":"Candidat Fictif","consents":{"terms_accepted":true,"data_processing":true}}'
+```
+
+La réponse de l'inscription contient `attach_offer` ; le candidat accepte avec
+`POST /auth/attach-visitor-session` (`{"visitor_session_id": "…", "consent": true}`, en-tête `Authorization: Bearer …`).
+
 ### Erreurs
 
 Toutes les erreurs ont le même format :
@@ -134,8 +171,8 @@ Le `request_id` (aussi dans l'en-tête `X-Request-ID`) permet de retrouver la re
 
 | Élément | Aujourd'hui | Plus tard |
 |---|---|---|
-| Authentification | en-têtes `X-Dev-*` / sélecteur de rôle | connexion réelle candidat / staff |
-| Chat | flux simulé (`NEXT_PUBLIC_CHAT_MOCK=true`) | LLM + agents + RAG |
+| Réponse de l'assistant | secours déterministe (texte fixe) ; faux flux de démonstration avec `NEXT_PUBLIC_CHAT_MOCK=true` | LLM + agents + RAG (E4 branche `set_chat_responder`, flux SSE) |
+| Sélecteur de rôle (dev) | en-têtes `X-Dev-*` pour parcourir les espaces sans compte | retiré hors dev |
 | Worker de synchronisation RAG | service provisoire (profil `worker`) | indexation des documents |
 
 ## 6. Commandes utiles

@@ -26,9 +26,17 @@ from app.core.pagination import Page, PageParamsDep
 from app.core.security import CurrentUser, CurrentUserDep, Role, require_roles
 from app.main import create_app
 
+TEST_JWT_SECRET = "test-only-jwt-secret-for-pytest-0123456789abcdef"
+
 
 def make_settings(**overrides) -> Settings:
-    base = {"app_env": "test", "database_url": None, "log_json": False}
+    base = {
+        "app_env": "test",
+        "database_url": None,
+        "log_json": False,
+        # Secret factice des tests (SA-28) : jamais utilisé hors de pytest.
+        "jwt_secret": TEST_JWT_SECRET,
+    }
     base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[call-arg]
 

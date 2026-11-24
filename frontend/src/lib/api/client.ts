@@ -1,10 +1,14 @@
 /**
  * Client API typé (fetch) pour `/api/v1`.
  * - base URL : `NEXT_PUBLIC_API_BASE_URL` ;
- * - en-têtes d'auth simulée X-Dev-* si `NEXT_PUBLIC_APP_ENV=dev` ;
+ * - authentification (E3) : `Authorization: Bearer <jeton>` si l'utilisateur est connecté ;
+ *   un 401 déclenche **un** renouvellement (`/auth/refresh`) puis un nouvel essai ;
+ * - sinon, en-têtes d'auth simulée X-Dev-* si `NEXT_PUBLIC_APP_ENV=dev` ;
+ * - les cookies (`sc_visitor`, `sc_refresh`, httpOnly) suivent les appels (`credentials`) ;
  * - toute erreur est levée sous forme d'`ApiError` (format SA-5 §1.4).
  */
 import { config } from "@/lib/config";
+import { getAccessToken, getRefreshHandler } from "@/lib/auth/token";
 import { devAuthHeaders } from "./dev-identity";
 import { apiErrorFromException, apiErrorFromResponse, CLIENT_ERROR_CODES, ApiError } from "./errors";
 import type { Health } from "./types";
@@ -21,6 +25,10 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Clé d'idempotence (SA-5 §1.6) pour les créations à effet métier. */
   idempotencyKey?: string;
+  /** N'envoie pas les en-têtes X-Dev-* (chat : le visiteur reste un visiteur). */
+  skipDevAuth?: boolean;
+  /** Pas de renouvellement automatique sur 401 (routes `/auth/*`). */
+  noRefresh?: boolean;
 }
 
 export interface ApiClientOptions {
@@ -53,14 +61,36 @@ export function createApiClient(options: ApiClientOptions = {}) {
   const fetchImpl = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
   const authHeaders = options.authHeaders ?? (() => devAuthHeaders());
 
-  /** En-têtes communs (auth simulée + extras). */
-  function headers(extra?: Record<string, string>): Record<string, string> {
-    return { ...(devAuth ? authHeaders() : {}), ...extra };
+  /** En-têtes communs : jeton Bearer si connecté, sinon auth simulée (dev), + extras. */
+  function headers(extra?: Record<string, string>, skipDevAuth = false): Record<string, string> {
+    const token = getAccessToken();
+    const auth = token
+      ? { Authorization: `Bearer ${token}` }
+      : devAuth && !skipDevAuth
+        ? authHeaders()
+        : {};
+    return { ...auth, ...extra };
   }
 
   /** Envoie une requête brute ; lève ApiError en cas d'échec réseau ou HTTP. */
   async function raw(path: string, opts: RequestOptions = {}): Promise<Response> {
-    const h: Record<string, string> = headers({ Accept: "application/json", ...opts.headers });
+    const sentToken = getAccessToken();
+    const response = await send(path, opts);
+    if (response.status === 401 && sentToken && !opts.noRefresh) {
+      // Jeton expiré (15 min) : un seul renouvellement, puis un seul nouvel essai.
+      const refresh = getRefreshHandler();
+      if (refresh && (await refresh())) {
+        const retried = await send(path, opts);
+        if (!retried.ok) throw await apiErrorFromResponse(retried);
+        return retried;
+      }
+    }
+    if (!response.ok) throw await apiErrorFromResponse(response);
+    return response;
+  }
+
+  async function send(path: string, opts: RequestOptions): Promise<Response> {
+    const h: Record<string, string> = headers({ Accept: "application/json", ...opts.headers }, opts.skipDevAuth);
     let body: BodyInit | undefined;
     if (opts.body instanceof FormData) {
       body = opts.body;
@@ -70,21 +100,18 @@ export function createApiClient(options: ApiClientOptions = {}) {
     }
     if (opts.idempotencyKey) h["Idempotency-Key"] = opts.idempotencyKey;
 
-    let response: Response;
     try {
-      response = await fetchImpl(buildUrl(baseUrl, path, opts.query), {
+      return await fetchImpl(buildUrl(baseUrl, path, opts.query), {
         method: opts.method ?? "GET",
         headers: h,
         body,
         signal: opts.signal,
-        // Le cookie visiteur `sc_visitor` (httpOnly) doit suivre les appels cross-origin.
+        // Les cookies httpOnly (`sc_visitor`, `sc_refresh`) doivent suivre les appels cross-origin.
         credentials: "include",
       });
     } catch (err) {
       throw apiErrorFromException(err);
     }
-    if (!response.ok) throw await apiErrorFromResponse(response);
-    return response;
   }
 
   /** Requête JSON typée. Une réponse 204 renvoie `undefined`. */

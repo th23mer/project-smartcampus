@@ -10,13 +10,24 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 from app.models import enums
 from app.models._common import (
+    TZ,
     CreatedAt,
     Str,
     StrNull,
@@ -106,4 +117,28 @@ class Consent(UUIDPrimaryKey, CreatedAt, Base):
         Index(None, "user_id", "consent_type", text("recorded_at DESC")),
         Index(None, "visitor_session_id"),
         Index(None, "conversation_id"),
+    )
+
+
+class RefreshToken(UUIDPrimaryKey, Timestamps, Base):
+    """Jeton de renouvellement opaque (cookie `sc_refresh`, SA-28 ; SA-5 §1.2, D3).
+
+    Seul le hachage SHA-256 est stocké. Chaque usage le remplace (rotation) : `replaced_by_id`
+    pointe vers le suivant. Réutiliser un jeton déjà remplacé révoque toute la famille
+    (`family_id`), signe d'un vol de cookie.
+    """
+
+    __tablename__ = "refresh_token"
+
+    user_id: Mapped[uuid.UUID] = fk("user_account.id", nullable=False, ondelete="CASCADE")
+    family_id: Mapped[uuid.UUID]
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, unique=True)
+    expires_at: Mapped[TZ]
+    revoked_at: Mapped[TZNull]
+    replaced_by_id: Mapped[uuid.UUID | None] = fk("refresh_token.id", ondelete="SET NULL")
+
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="expiry"),
+        Index(None, "user_id"),
+        Index(None, "family_id"),
     )

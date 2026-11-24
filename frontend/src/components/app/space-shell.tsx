@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { BackendStatus } from "./backend-status";
+import { AccountMenu } from "@/components/auth/account-menu";
 import { cn } from "@/lib/utils";
 
 export interface NavItem {
@@ -67,6 +68,7 @@ export function SpaceShell({
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-end gap-3 border-b px-6 py-3">
           <BackendStatus />
+          <AccountMenu />
         </header>
         <main className="flex-1 px-6 py-6">{children}</main>
       </div>

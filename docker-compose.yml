@@ -87,6 +87,8 @@ services:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_JSON: ${LOG_JSON:-false}
+      # Secret de signature des jetons d'accès (SA-28). Vide : connexion indisponible (503).
+      JWT_SECRET: ${JWT_SECRET:-}
       # Le navigateur appelle l'API depuis l'origine du frontend publiée sur l'hôte.
       CORS_ORIGINS: '["http://localhost:${FRONTEND_HOST_PORT:-3000}","http://127.0.0.1:${FRONTEND_HOST_PORT:-3000}"]'
       DATABASE_URL: postgresql+asyncpg://smartcampus_app:${SMARTCAMPUS_APP_PASSWORD}@db:5432/${POSTGRES_DB:-smartcampus}
@@ -140,7 +142,7 @@ services:
       args: &next-public
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${BACKEND_HOST_PORT:-8000}}
         NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV:-dev}
-        NEXT_PUBLIC_CHAT_MOCK: ${NEXT_PUBLIC_CHAT_MOCK:-true}
+        NEXT_PUBLIC_CHAT_MOCK: ${NEXT_PUBLIC_CHAT_MOCK:-false}
     image: smartcampus-frontend:dev
     container_name: smartcampus-frontend
     restart: unless-stopped
